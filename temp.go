@@ -1,145 +1,236 @@
 package main
 
 import "fmt"
-import "net/http"
-import "encoding/json"
-import "io/ioutil"
-import "golang.org/x/net/websocket"
-import "sync/atomic"
 import "log"
 import "os"
+import "errors"
 import "strings"
-import "gopkg.in/dougEfresh/gtoggl.v8"
-
-var counter uint64
-
-type responseSelf struct {
-	Id string `json:"id"`
-}
-
-type responseRtmStart struct {
-	Ok    bool         `json:"ok,omitEmpty"`
-	Error string       `json:"error,omitEmpty"`
-	Url   string       `json:"url,omitEmpty"`
-	Self  responseSelf `json:"self,omitEmpty"`
-	User  string       `json:"user,omitEmpty"`
-}
-
-func slackStart(token string) (wsurl, id string, err error) {
-	url := fmt.Sprintf("https://slack.com/api/rtm.start?token=%s", token)
-	resp, err := http.Get(url)
-	if err != nil {
-		return
-	}
-
-	if resp.StatusCode != 200 {
-		err = fmt.Errorf("API request failed with code %d", resp.StatusCode)
-		return
-	}
-	fmt.Println(json.MarshalIndent(resp.Body, "", "    "))
-	body, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return
-	}
-
-	var respObj responseRtmStart
-	err = json.Unmarshal(body, &respObj)
-	if err != nil {
-		return
-	}
-
-	if !respObj.Ok {
-		err = fmt.Errorf("Slack error: %s", respObj.Errorgopkg.in/dougEfresh/gtoggl.v8)
-		return
-	}
-
-	wsurl = respObj.Url
-	id = respObj.Self.Id
-	return
-}
-
-type Message struct {
-	Id      uint64 `json:"id"`
-	Type    string `json:"type"`
-	Channel string `json:"channel"`
-	Text    string `json:"text"`
-}
-
-func getMessage(ws *websocket.Conn) (m Message, err error) {
-	err = websocket.JSON.Receive(ws, &m)
-	return
-}
-
-func postMessage(ws *websocket.Conn, m Message) error {
-	m.Id = atomic.AddUint64(&counter, 1)
-	return websocket.JSON.Send(ws, m)
-}
-
-func slackConnect(token string) (*websocket.Conn, string) {
-	wsurl, id, err := slackStart(token)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	ws, err := websocket.Dial(wsurl, "", "https://api.slack.com")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	return ws, id
-
-}
+import "github.com/nlopes/slack"
+import "github.com/gedex/go-toggl/toggl"
 
 func pingTogglApi(apiKey string) error {
-	tc, err := gtoggl.NewClient(apiKey)
-	if err == nil {
-		panic(err)
+	tc := toggl.NewClient(apiKey)
+	ws, err := tc.Workspaces.List()
+	if err != nil {
+		fmt.Println(os.Stderr, "Error: %s\n", err)
+		return err
 	}
+	fmt.Println(ws)
+	return nil
+}
+
+func stopTimer(apiKey string) (*toggl.TimeEntry, error) {
+	tc := toggl.NewClient(apiKey)
+	sessionId, ok := sessionMap[apiKey]
+	if !ok {
+		return nil, errors.New("no timer started!")
+	}
+	te, err := tc.TimeEntries.Stop(sessionId)
+	if err != nil {
+		return nil, err
+	}
+	return te, nil
+}
+
+func startTimer(apiKey string, pid int) *toggl.TimeEntry {
+	tc := toggl.NewClient(apiKey)
+	te := &toggl.TimeEntry{
+		ProjectID:   pid,
+		CreatedWith: "TogglBot",
+	}
+	tec, err := tc.TimeEntries.Start(te)
+	if err != nil {
+		fmt.Println(err)
+	}
+	sessionMap[apiKey] = tec.ID
+	return tec
+}
+
+func getProjectWithName(apiKey, projectName string) int {
+	tc := toggl.NewClient(apiKey)
+	me, err := tc.Users.Me(true)
+	var retVal int
+	if err != nil {
+		fmt.Println(err)
+	}
+	for _, project := range me.Projects {
+		fmt.Println(project.Name)
+		if strings.EqualFold(project.Name, projectName) {
+			retVal = project.ID
+		}
+	}
+	fmt.Println("FOUND PROJECT WITH NAME: " + projectName + ", id is: " + string(retVal))
+	return retVal
 
 }
 
-func executeCommand(userMap map[string]string, userId string, parts []string) string {
-	if parts[1] == "register" && len(parts) == 3 {
-		userMap[userId] = parts[2]
-		err = pingTogglApi(parts[2])
+type BotCommand struct {
+	Channel string
+	Event   *slack.MessageEvent
+	UserId  string
+}
+
+type ReplyChannel struct {
+	Channel      string
+	Attachment   *slack.Attachment
+	DisplayTitle string
+}
+
+var (
+	api               *slack.Client
+	botCommandChannel chan *BotCommand
+	botReplyChannel   chan ReplyChannel
+	botId             string
+	userMap           map[string]string
+	sessionMap        map[string]int
+)
+
+func handleBotCommands(replyChannel chan ReplyChannel) {
+	commands := map[string]string{
+		"register": "Register yourself with togglbot. `@togglbot register MY_TOGGL_API_KEY`",
+		"start":    "Start a timer for a given project and description. `@togglbot start <PROJECT_NAME> <EVERYTHING_ELSE_IS_DESCRIPTION>`",
+		"stop":     "Stops any current timer session. `@togglbot stop`",
+		"track":    "adds a toggl entry to a project for a given time range. `@togglbot track icancope 9am-5pm`",
+	}
+
+	var reply ReplyChannel
+
+	for {
+		incomingCommand := <-botCommandChannel
+		commandArray := strings.Fields(incomingCommand.Event.Text)
+		reply.Channel = incomingCommand.Channel
+		switch commandArray[1] {
+
+		case "help":
+			reply.DisplayTitle = "Help!"
+			fields := make([]slack.AttachmentField, 0)
+			for k, v := range commands {
+				fields = append(fields, slack.AttachmentField{
+					Title: "<bot> " + k,
+					Value: v,
+				})
+			}
+			attachment := &slack.Attachment{
+				Pretext:    "TogglBot Command List",
+				Color:      "#B733FF",
+				Fields:     fields,
+				MarkdownIn: []string{"fields"},
+			}
+			reply.Attachment = attachment
+			fmt.Println("SENDING REPLY TO CHANNEL")
+			replyChannel <- reply
+
+		case "register":
+			togglApiKey := commandArray[2]
+			err := pingTogglApi(togglApiKey)
+			if err != nil {
+				reply.DisplayTitle = "Failed to register. Bad api key?"
+			} else {
+				userMap[incomingCommand.Event.User] = togglApiKey
+				reply.DisplayTitle = "Successfully registered!"
+			}
+			replyChannel <- reply
+
+		case "start":
+			togglApiKey, ok := userMap[incomingCommand.Event.User]
+			if !ok {
+				reply.DisplayTitle = "You have not registered with togglbot yet. Try @togglbot register API_KEY_HERE"
+				replyChannel <- reply
+				break
+			}
+			project := commandArray[2]
+			pid := getProjectWithName(togglApiKey, project)
+			fmt.Printf("%v", pid)
+			startTimer(togglApiKey, pid)
+			reply.DisplayTitle = "Timer started! *get back to work peon*"
+			replyChannel <- reply
+		case "stop":
+			togglApiKey, ok := userMap[incomingCommand.Event.User]
+			if !ok {
+				reply.DisplayTitle = "You have not registered with togglbot yet. Try @togglbot register API_KEY_HERE"
+				replyChannel <- reply
+				break
+			}
+			te, err := stopTimer(togglApiKey)
+			if err != nil {
+				reply.DisplayTitle = "couldn't stop timer: " + err.Error()
+				replyChannel <- reply
+				break
+			}
+			reply.DisplayTitle = fmt.Sprintf("Timer Stopped. Worked for %v minutes on %v", te.Duration, te.ProjectID)
+			replyChannel <- reply
+		}
+	}
+}
+
+func handleBotReplies() {
+	for {
+		reply := <-botReplyChannel
+		params := slack.PostMessageParameters{}
+		params.AsUser = true
+		if reply.Attachment != nil {
+			params.Attachments = []slack.Attachment{*reply.Attachment}
+		}
+		_, _, err := api.PostMessage(reply.Channel, reply.DisplayTitle, params)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 }
 
 func main() {
-	userTogglMap := make(map[string]string)
 	if len(os.Args) != 2 {
 		fmt.Printf("usage: togglbot slack-bot-token")
 		os.Exit(1)
 	}
+	userMap = make(map[string]string)
+	sessionMap = make(map[string]int)
+	token := os.Args[1]
+	api = slack.New(token)
+	api.SetDebug(true)
+	rtm := api.NewRTM()
 
-	ws, id := slackConnect(os.Args[1])
-	fmt.Println("TogglBot ready, ^C exits")
-
+	botCommandChannel = make(chan *BotCommand)
+	botReplyChannel = make(chan ReplyChannel)
+	go rtm.ManageConnection()
+	go handleBotCommands(botReplyChannel)
+	go handleBotReplies()
+	go fmt.Println("TogglBot ready, ^C exits")
+Loop:
 	for {
-		m, err := getMessage(ws)
+		select {
+		case msg := <-rtm.IncomingEvents:
+			switch event := msg.Data.(type) {
+			case *slack.ConnectedEvent:
+				botId = event.Info.User.ID
+			case *slack.MessageEvent:
+				var channelInfo *slack.Channel
+				var channelName string
+				if strings.HasPrefix(event.Channel, "D") {
+					channelInfo = &slack.Channel{slack.groupConversation{
+						Name: event.Channel,
+					}}
+				}
 
-		if err != nil {
-			log.Fatal(err)
-		}
+				botCommand := &BotCommand{
+					Channel: channelInfo,
+					Event:   event,
+					UserId:  event.User,
+				}
 
-		if m.Type == "message" && strings.HasPrefix(m.Text, "<@"+id+">") {
-			//Try to parse it into a message
-			parts := strings.Fields(m.Text)
-			if len(parts) == 2 || len(parts) == 3 {
-				go func(m Message) {
-					m.Text = executeCommand(userMap)
-					postMessage(ws, m)
-				}(m)
-			} else {
-				m.Text = fmt.Sprintf("sorry, that does not compute!\n")
-				fmt.Println(m.Text)
-				//postMessage(ws, m)
+				if event.Type == "message" && strings.HasPrefix(event.Text, "<@"+botId+">") {
+					fmt.Println("FOUND COMMAND")
+					botCommandChannel <- botCommand
+				}
+			case *slack.RTMError:
+				fmt.Printf("ERROR: %s\n", event.Error())
+			case *slack.InvalidAuthEvent:
+				fmt.Printf("Invalid credentials")
+				break Loop
+			default:
+				fmt.Printf("\n")
 			}
-
 		}
-
 	}
 
 }
