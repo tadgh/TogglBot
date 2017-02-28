@@ -93,11 +93,10 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 		"track":    "adds a toggl entry to a project for a given time range. `@togglbot track icancope 9am-5pm`",
 	}
 
-	var reply ReplyChannel
-
 	for {
 		incomingCommand := <-botCommandChannel
 		commandArray := strings.Fields(incomingCommand.Event.Text)
+		var reply ReplyChannel
 		reply.Channel = incomingCommand.Channel
 		switch commandArray[1] {
 
@@ -204,16 +203,9 @@ Loop:
 			case *slack.ConnectedEvent:
 				botId = event.Info.User.ID
 			case *slack.MessageEvent:
-				var channelInfo *slack.Channel
-				var channelName string
-				if strings.HasPrefix(event.Channel, "D") {
-					channelInfo = &slack.Channel{slack.groupConversation{
-						Name: event.Channel,
-					}}
-				}
 
 				botCommand := &BotCommand{
-					Channel: channelInfo,
+					Channel: event.Channel,
 					Event:   event,
 					UserId:  event.User,
 				}
