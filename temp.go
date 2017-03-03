@@ -6,62 +6,67 @@ import "os"
 import "errors"
 import "strings"
 import "github.com/nlopes/slack"
-import "github.com/gedex/go-toggl/toggl"
+import "github.com/jason0x43/go-toggl"
 
 func pingTogglApi(apiKey string) error {
-	tc := toggl.NewClient(apiKey)
-	ws, err := tc.Workspaces.List()
+	ts := toggl.OpenSession(apiKey)
+	acc, err := ts.GetAccount()
 	if err != nil {
 		fmt.Println(os.Stderr, "Error: %s\n", err)
 		return err
 	}
-	fmt.Println(ws)
+	fmt.Println(acc)
 	return nil
 }
 
+func createTimeEntry(apiKey, timeRange, description string, pid int) (*toggl.TimeEntry, error) {
+	ts := toggl.OpenSession(apiKey)
+	//TODO figure out time manipulation in go.
+	te := &toggl.TimeEntry{
+		Pid: pid,
+	}
+	return nil, nil
+}
+
 func stopTimer(apiKey string) (*toggl.TimeEntry, error) {
-	tc := toggl.NewClient(apiKey)
+	ts := toggl.OpenSession(apiKey)
 	sessionId, ok := sessionMap[apiKey]
 	if !ok {
 		return nil, errors.New("no timer started!")
 	}
-	te, err := tc.TimeEntries.Stop(sessionId)
+	te, err := ts.StopTimeEntry(sessionId)
 	if err != nil {
 		return nil, err
 	}
-	return te, nil
+	return &te, nil
 }
 
-func startTimer(apiKey string, pid int) *toggl.TimeEntry {
-	tc := toggl.NewClient(apiKey)
-	te := &toggl.TimeEntry{
-		ProjectID:   pid,
-		CreatedWith: "TogglBot",
-	}
-	tec, err := tc.TimeEntries.Start(te)
+func startTimer(apiKey, description string, pid int) *toggl.TimeEntry {
+	ts := toggl.OpenSession(apiKey)
+	te, err := ts.StartTimeEntryForProject("Working....", pid)
 	if err != nil {
 		fmt.Println(err)
 	}
-	sessionMap[apiKey] = tec.ID
-	return tec
+	sessionMap[apiKey] = te
+	return &te
 }
 
 func getProjectWithName(apiKey, projectName string) int {
-	tc := toggl.NewClient(apiKey)
-	me, err := tc.Users.Me(true)
+	ts := toggl.OpenSession(apiKey)
+	acc, err := ts.GetAccount()
 	var retVal int
 	if err != nil {
 		fmt.Println(err)
 	}
-	for _, project := range me.Projects {
+	for _, project := range acc.Data.Projects {
 		fmt.Println(project.Name)
+		//case insensitive string comparison
 		if strings.EqualFold(project.Name, projectName) {
 			retVal = project.ID
 		}
 	}
 	fmt.Println("FOUND PROJECT WITH NAME: " + projectName + ", id is: " + string(retVal))
 	return retVal
-
 }
 
 type BotCommand struct {
@@ -82,7 +87,7 @@ var (
 	botReplyChannel   chan ReplyChannel
 	botId             string
 	userMap           map[string]string
-	sessionMap        map[string]int
+	sessionMap        map[string]toggl.TimeEntry
 )
 
 func handleBotCommands(replyChannel chan ReplyChannel) {
@@ -137,10 +142,15 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 				replyChannel <- reply
 				break
 			}
+			if len(commandArray) <= 3 {
+				reply.DisplayTitle = "Please provide a project name and description! `@togglbot start PROJECT_NAME DESCRIPTION`"
+				replyChannel <- reply
+			}
 			project := commandArray[2]
+			description := strings.Join(commandArray[3:], " ")
 			pid := getProjectWithName(togglApiKey, project)
 			fmt.Printf("%v", pid)
-			startTimer(togglApiKey, pid)
+			startTimer(togglApiKey, description, pid)
 			reply.DisplayTitle = "Timer started! *get back to work peon*"
 			replyChannel <- reply
 		case "stop":
@@ -156,8 +166,21 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 				replyChannel <- reply
 				break
 			}
-			reply.DisplayTitle = fmt.Sprintf("Timer Stopped. Worked for %v minutes on %v", te.Duration, te.ProjectID)
+			reply.DisplayTitle = fmt.Sprintf("Timer Stopped. Worked for %v minutes on %v", te.Duration, te.Pid)
 			replyChannel <- reply
+		case "track":
+			togglApiKey, ok := userMap[incomingCommand.Event.User]
+			if !ok {
+				reply.DisplayTitle = "You have not registered with togglbot yet. Try @togglbot register API_KEY_HERE"
+				replyChannel <- reply
+				break
+			}
+			projectName := commandArray[2]
+			pid := getProjectWithName(togglApiKey, projectName)
+			timeRange := commandArray[3]
+			description := strings.Join(commandArray[4:], " ")
+			te, err := createTimeEntry(togglApiKey, timeRange, description, pid)
+
 		}
 	}
 }
@@ -178,12 +201,13 @@ func handleBotReplies() {
 }
 
 func main() {
+	toggl.EnableLog()
 	if len(os.Args) != 2 {
 		fmt.Printf("usage: togglbot slack-bot-token")
 		os.Exit(1)
 	}
 	userMap = make(map[string]string)
-	sessionMap = make(map[string]int)
+	sessionMap = make(map[string]toggl.TimeEntry)
 	token := os.Args[1]
 	api = slack.New(token)
 	api.SetDebug(true)
