@@ -6,26 +6,58 @@ import "os"
 import "errors"
 import "strings"
 import "github.com/nlopes/slack"
-import "github.com/jason0x43/go-toggl"
+import "github.com/tadgh/go-toggl"
+import "encoding/gob"
+import "time"
+import "runtime"
+
+const file = "./test.gob"
+
+func Check(err error) {
+	if err != nil {
+		_, file, line, _ := runtime.Caller(1)
+		fmt.Println(line, "\t", file, "\n", err)
+		os.Exit(1)
+	}
+}
 
 func pingTogglApi(apiKey string) error {
 	ts := toggl.OpenSession(apiKey)
-	acc, err := ts.GetAccount()
+	_, err := ts.GetAccount()
 	if err != nil {
 		fmt.Println(os.Stderr, "Error: %s\n", err)
 		return err
 	}
-	fmt.Println(acc)
 	return nil
 }
 
-func createTimeEntry(apiKey, timeRange, description string, pid int) (*toggl.TimeEntry, error) {
-	ts := toggl.OpenSession(apiKey)
-	//TODO figure out time manipulation in go.
-	te := &toggl.TimeEntry{
-		Pid: pid,
+func Save(path string, object interface{}) error {
+	file, err := os.Create(path)
+	if err == nil {
+		encoder := gob.NewEncoder(file)
+		encoder.Encode(object)
 	}
-	return nil, nil
+	file.Close()
+	return err
+}
+
+func Load(path string, object interface{}) error {
+	file, err := os.Open(path)
+	if err == nil {
+		decoder := gob.NewDecoder(file)
+		err = decoder.Decode(object)
+	}
+	file.Close()
+	return err
+}
+
+func createTimeEntry(apiKey, description string, start time.Time, duration time.Duration, pid, tid int) *toggl.TimeEntry {
+	ts := toggl.OpenSession(apiKey)
+	te, err := ts.CreateTimeEntry(pid, 0, start, duration, description)
+	if err != nil {
+		log.Fatal("Error uploading time entry! %v", err)
+	}
+	return &te
 }
 
 func stopTimer(apiKey string) (*toggl.TimeEntry, error) {
@@ -43,7 +75,8 @@ func stopTimer(apiKey string) (*toggl.TimeEntry, error) {
 
 func startTimer(apiKey, description string, pid int) *toggl.TimeEntry {
 	ts := toggl.OpenSession(apiKey)
-	te, err := ts.StartTimeEntryForProject("Working....", pid)
+	te, err := ts.StartTimeEntryForProject(description, pid)
+
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -59,7 +92,6 @@ func getProjectWithName(apiKey, projectName string) int {
 		fmt.Println(err)
 	}
 	for _, project := range acc.Data.Projects {
-		fmt.Println(project.Name)
 		//case insensitive string comparison
 		if strings.EqualFold(project.Name, projectName) {
 			retVal = project.ID
@@ -131,6 +163,8 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 				reply.DisplayTitle = "Failed to register. Bad api key?"
 			} else {
 				userMap[incomingCommand.Event.User] = togglApiKey
+				err := Save(file, userMap)
+				Check(err)
 				reply.DisplayTitle = "Successfully registered!"
 			}
 			replyChannel <- reply
@@ -145,6 +179,7 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			if len(commandArray) <= 3 {
 				reply.DisplayTitle = "Please provide a project name and description! `@togglbot start PROJECT_NAME DESCRIPTION`"
 				replyChannel <- reply
+				break
 			}
 			project := commandArray[2]
 			description := strings.Join(commandArray[3:], " ")
@@ -166,7 +201,11 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 				replyChannel <- reply
 				break
 			}
-			reply.DisplayTitle = fmt.Sprintf("Timer Stopped. Worked for %v minutes on %v", te.Duration, te.Pid)
+			dur, err := time.ParseDuration(fmt.Sprintf("%vs", te.Duration))
+			if err != nil {
+				log.Fatal("Unparseable duration! %v", te.Duration)
+			}
+			reply.DisplayTitle = fmt.Sprintf("Timer Stopped. Worked for %v.", dur.String())
 			replyChannel <- reply
 		case "track":
 			togglApiKey, ok := userMap[incomingCommand.Event.User]
@@ -179,10 +218,44 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			pid := getProjectWithName(togglApiKey, projectName)
 			timeRange := commandArray[3]
 			description := strings.Join(commandArray[4:], " ")
-			te, err := createTimeEntry(togglApiKey, timeRange, description, pid)
-
+			startTime, duration, err := parseTimeRange(timeRange)
+			if err != nil {
+				reply.DisplayTitle = err.Error()
+				replyChannel <- reply
+				break
+			}
+			createTimeEntry(togglApiKey, description, *startTime, *duration, pid, 0)
+			reply.DisplayTitle = "Time entry created!"
+			replyChannel <- reply
+		default:
+			reply.DisplayTitle = "Sorry, i don't understand that command. Try `@Togglbot help`"
+			replyChannel <- reply
 		}
 	}
+}
+
+func parseTimeRange(timeRange string) (*time.Time, *time.Duration, error) {
+	fields := strings.Split(timeRange, "-")
+	if len(fields) != 2 {
+		return nil, nil, errors.New("Your date range is incorrectly formatted! Try something like: 9:00AM-5:00PM")
+	}
+
+	startTime, err := time.Parse(time.Kitchen, fields[0])
+	if err != nil {
+		return nil, nil, errors.New("Your date range is incorrectly formatted! Try something like: 9:00AM-5:00PM")
+	}
+
+	endTime, err := time.Parse(time.Kitchen, fields[1])
+	if err != nil {
+		return nil, nil, errors.New("Your date range is incorrectly formatted! Try something like: 9:00AM-5:00PM")
+	}
+
+	duration := endTime.Sub(startTime)
+
+	// Kitchen time has only hours and PM/AM. Drop in today's date.
+	now := time.Now()
+	startTime = startTime.AddDate(now.Year(), int(now.Month())-1, now.Day()-1)
+	return &startTime, &duration, nil
 }
 
 func handleBotReplies() {
@@ -201,16 +274,24 @@ func handleBotReplies() {
 }
 
 func main() {
-	toggl.EnableLog()
+
 	if len(os.Args) != 2 {
 		fmt.Printf("usage: togglbot slack-bot-token")
 		os.Exit(1)
 	}
-	userMap = make(map[string]string)
+
+	//First attempt to deserialize a saved registration file, otherwise
+	//create new
+	err := Load(file, &userMap)
+	if err != nil {
+		fmt.Println("ERROR WAS DETECTED")
+		log.Fatal(err)
+		userMap = make(map[string]string)
+	}
+
 	sessionMap = make(map[string]toggl.TimeEntry)
 	token := os.Args[1]
 	api = slack.New(token)
-	api.SetDebug(true)
 	rtm := api.NewRTM()
 
 	botCommandChannel = make(chan *BotCommand)
@@ -243,8 +324,6 @@ Loop:
 			case *slack.InvalidAuthEvent:
 				fmt.Printf("Invalid credentials")
 				break Loop
-			default:
-				fmt.Printf("\n")
 			}
 		}
 	}
