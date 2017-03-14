@@ -134,8 +134,9 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 
 	for {
 		incomingCommand := <-botCommandChannel
-		commandArray := strings.Fields(incomingCommand.Event.Text)
-		if commandArray[0] == "<@"+botId+">" {
+
+		commandArray := strings.Fields(strings.ToLower(incomingCommand.Event.Text))
+		if strings.EqualFold(commandArray[0], "<@"+botId+">") {
 			commandArray = commandArray[1:]
 		}
 		var reply ReplyChannel
@@ -241,6 +242,7 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 }
 
 func parseTimeRange(timeRange string) (*time.Time, *time.Duration, error) {
+	timeRange = strings.ToUpper(timeRange)
 	fields := strings.Split(timeRange, "-")
 	if len(fields) != 2 {
 		return nil, nil, errors.New("Your date range is incorrectly formatted! Try something like: 9:00AM-5:00PM")
@@ -260,7 +262,9 @@ func parseTimeRange(timeRange string) (*time.Time, *time.Duration, error) {
 
 	// Kitchen time has only hours and PM/AM. Drop in today's date.
 	now := time.Now()
-	startTime = startTime.AddDate(now.Year(), int(now.Month())-1, now.Day()-1)
+	fmt.Println("NOW:\t", now)
+	startTime = time.Date(now.Year(), now.Month(), now.Day(), startTime.Hour(), startTime.Minute(), startTime.Second(), startTime.Nanosecond(), now.Location())
+	fmt.Println("START TIME:\t", startTime)
 	return &startTime, &duration, nil
 }
 
