@@ -100,7 +100,6 @@ func getProjectWithName(apiKey, projectName string) int {
 			retVal = project.ID
 		}
 	}
-	fmt.Println("FOUND PROJECT WITH NAME: " + projectName + ", id is: " + string(retVal))
 	return retVal
 }
 
@@ -136,10 +135,13 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 	for {
 		incomingCommand := <-botCommandChannel
 		commandArray := strings.Fields(incomingCommand.Event.Text)
+		if commandArray[0] == "<@"+botId+">" {
+			commandArray = commandArray[1:]
+		}
 		var reply ReplyChannel
 		reply.Channel = incomingCommand.Channel
 
-		switch commandArray[1] {
+		switch commandArray[0] {
 		case "help":
 			reply.DisplayTitle = "Help!"
 			fields := make([]slack.AttachmentField, 0)
@@ -156,10 +158,9 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 				MarkdownIn: []string{"fields"},
 			}
 			reply.Attachment = attachment
-			fmt.Println("SENDING REPLY TO CHANNEL")
 			replyChannel <- reply
 		case "register":
-			togglApiKey := commandArray[2]
+			togglApiKey := commandArray[1]
 			err := pingTogglApi(togglApiKey)
 			if err != nil {
 				reply.DisplayTitle = "Failed to register. Bad api key?"
@@ -172,23 +173,25 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			replyChannel <- reply
 		}
 
+		if reply.DisplayTitle != "" {
+			continue
+		}
 		togglApiKey, ok := userMap[incomingCommand.Event.User]
 		if !ok {
 			reply.DisplayTitle = "You have not registered with togglbot yet. Try @togglbot register API_KEY_HERE"
 			replyChannel <- reply
-			break
+			continue
 		}
 
-		switch commandArray[1] {
-
+		switch commandArray[0] {
 		case "start":
-			if len(commandArray) <= 3 {
+			if len(commandArray) <= 2 {
 				reply.DisplayTitle = "Please provide a project name and description! `@togglbot start PROJECT_NAME DESCRIPTION`"
 				replyChannel <- reply
 				break
 			}
-			project := commandArray[2]
-			description := strings.Join(commandArray[3:], " ")
+			project := commandArray[1]
+			description := strings.Join(commandArray[2:], " ")
 			pid := getProjectWithName(togglApiKey, project)
 			fmt.Printf("%v", pid)
 			startTimer(togglApiKey, description, pid)
@@ -208,17 +211,17 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			reply.DisplayTitle = fmt.Sprintf("Timer Stopped. Worked for %v.", dur.String())
 			replyChannel <- reply
 		case "track":
-			if len(commandArray) < 4 {
+			if len(commandArray) < 3 {
 				reply.DisplayTitle = "Sorry, I don't have enough information to make an event for you. try `@togglbot track PROJECT_NAME 9:00AM-5:00PM TASK_DESCRIPTION`"
 				replyChannel <- reply
 				break
 			}
-			projectName := commandArray[2]
+			projectName := commandArray[1]
 			pid := getProjectWithName(togglApiKey, projectName)
-			timeRange := commandArray[3]
+			timeRange := commandArray[2]
 			description := "no description provided"
-			if len(commandArray) > 4 {
-				description = strings.Join(commandArray[4:], " ")
+			if len(commandArray) > 3 {
+				description = strings.Join(commandArray[3:], " ")
 			}
 
 			startTime, duration, err := parseTimeRange(timeRange)
@@ -271,6 +274,7 @@ func handleBotReplies() {
 		}
 		_, _, err := api.PostMessage(reply.Channel, reply.DisplayTitle, params)
 		if err != nil {
+			fmt.Println("FATAL SHIT")
 			log.Fatal(err)
 		}
 	}
@@ -296,7 +300,6 @@ func main() {
 	token := os.Args[1]
 	api = slack.New(token)
 	rtm := api.NewRTM()
-
 	botCommandChannel = make(chan *BotCommand)
 	botReplyChannel = make(chan ReplyChannel)
 	go rtm.ManageConnection()
@@ -318,8 +321,8 @@ Loop:
 					UserId:  event.User,
 				}
 
-				if event.Type == "message" && strings.HasPrefix(event.Text, "<@"+botId+">") {
-					fmt.Println("FOUND COMMAND")
+				if isValidMessageEvent(event) {
+					fmt.Println("Received event: ", event)
 					botCommandChannel <- botCommand
 				}
 			case *slack.RTMError:
@@ -331,4 +334,20 @@ Loop:
 		}
 	}
 
+}
+
+func isValidMessageEvent(event *slack.MessageEvent) bool {
+	if event.Type != "message" {
+		return false
+	}
+	if event.User == botId {
+		return false
+	}
+	if strings.HasPrefix(event.Text, "<@"+botId+">") {
+		return true
+	}
+	if strings.HasPrefix(event.Channel, "D") {
+		return true
+	}
+	return false
 }
