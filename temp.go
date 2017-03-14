@@ -62,11 +62,14 @@ func createTimeEntry(apiKey, description string, start time.Time, duration time.
 
 func stopTimer(apiKey string) (*toggl.TimeEntry, error) {
 	ts := toggl.OpenSession(apiKey)
-	sessionId, ok := sessionMap[apiKey]
-	if !ok {
-		return nil, errors.New("no timer started!")
+	te, err := ts.GetActiveTimeEntry()
+	if err != nil {
+		return nil, err
 	}
-	te, err := ts.StopTimeEntry(sessionId)
+	if te.ID <= 0 {
+		return nil, errors.New("No timer is currently running!")
+	}
+	te, err = ts.StopTimeEntry(te)
 	if err != nil {
 		return nil, err
 	}
@@ -135,8 +138,8 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 		commandArray := strings.Fields(incomingCommand.Event.Text)
 		var reply ReplyChannel
 		reply.Channel = incomingCommand.Channel
-		switch commandArray[1] {
 
+		switch commandArray[1] {
 		case "help":
 			reply.DisplayTitle = "Help!"
 			fields := make([]slack.AttachmentField, 0)
@@ -155,7 +158,6 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			reply.Attachment = attachment
 			fmt.Println("SENDING REPLY TO CHANNEL")
 			replyChannel <- reply
-
 		case "register":
 			togglApiKey := commandArray[2]
 			err := pingTogglApi(togglApiKey)
@@ -168,14 +170,18 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 				reply.DisplayTitle = "Successfully registered!"
 			}
 			replyChannel <- reply
+		}
+
+		togglApiKey, ok := userMap[incomingCommand.Event.User]
+		if !ok {
+			reply.DisplayTitle = "You have not registered with togglbot yet. Try @togglbot register API_KEY_HERE"
+			replyChannel <- reply
+			break
+		}
+
+		switch commandArray[1] {
 
 		case "start":
-			togglApiKey, ok := userMap[incomingCommand.Event.User]
-			if !ok {
-				reply.DisplayTitle = "You have not registered with togglbot yet. Try @togglbot register API_KEY_HERE"
-				replyChannel <- reply
-				break
-			}
 			if len(commandArray) <= 3 {
 				reply.DisplayTitle = "Please provide a project name and description! `@togglbot start PROJECT_NAME DESCRIPTION`"
 				replyChannel <- reply
@@ -189,12 +195,6 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			reply.DisplayTitle = "Timer started! *get back to work peon*"
 			replyChannel <- reply
 		case "stop":
-			togglApiKey, ok := userMap[incomingCommand.Event.User]
-			if !ok {
-				reply.DisplayTitle = "You have not registered with togglbot yet. Try @togglbot register API_KEY_HERE"
-				replyChannel <- reply
-				break
-			}
 			te, err := stopTimer(togglApiKey)
 			if err != nil {
 				reply.DisplayTitle = "couldn't stop timer: " + err.Error()
@@ -208,16 +208,19 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			reply.DisplayTitle = fmt.Sprintf("Timer Stopped. Worked for %v.", dur.String())
 			replyChannel <- reply
 		case "track":
-			togglApiKey, ok := userMap[incomingCommand.Event.User]
-			if !ok {
-				reply.DisplayTitle = "You have not registered with togglbot yet. Try @togglbot register API_KEY_HERE"
+			if len(commandArray) < 4 {
+				reply.DisplayTitle = "Sorry, I don't have enough information to make an event for you. try `@togglbot track PROJECT_NAME 9:00AM-5:00PM TASK_DESCRIPTION`"
 				replyChannel <- reply
 				break
 			}
 			projectName := commandArray[2]
 			pid := getProjectWithName(togglApiKey, projectName)
 			timeRange := commandArray[3]
-			description := strings.Join(commandArray[4:], " ")
+			description := "no description provided"
+			if len(commandArray) > 4 {
+				description = strings.Join(commandArray[4:], " ")
+			}
+
 			startTime, duration, err := parseTimeRange(timeRange)
 			if err != nil {
 				reply.DisplayTitle = err.Error()
