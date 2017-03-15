@@ -1,4 +1,4 @@
-# TogglBot
+# ![](https://pbs.twimg.com/profile_images/3224183389/017e79a95ca24d46f1794e9b2d6209ed_normal.png) TogglBot ![](https://pbs.twimg.com/profile_images/378800000271328329/349dc6f270e53cbe09cd05f6c032fc67_normal.png)
 
 TogglBot is a slack bot to help your organization interface with Toggl, the time-tracking application. 
 
