@@ -247,14 +247,14 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 
 func parseDate(readingDate string) (*time.Date, error) {
 	if strings.ToLower(readingDate) == "today" {
-		return nil, nil
+		return time.Now(), nil
 	}
 	parsedDate, err := time.Parse("2006/1/2", readingDate)
 	if err != nil {
 		return nil, errors.New("Your date is incorrectly formatted! Try something like: 2017/08/11. The ISO 8601 Standard 😉")
 	}
 
-	return parsedDate
+	return parsedDate, nil
 }
 
 func parseTimeRange(timeRange string, parsedDate time.Date) (*time.Time, *time.Duration, error) {
