@@ -26,7 +26,7 @@ func pingTogglApi(apiKey string) error {
 	ts := toggl.OpenSession(apiKey)
 	_, err := ts.GetAccount()
 	if err != nil {
-		fmt.Println(os.Stderr, "Error: %s\n", err)	
+		fmt.Println(os.Stderr, "Error: %s\n", err)
 		return err
 	}
 	return nil
