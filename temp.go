@@ -5,6 +5,7 @@ import "log"
 import "os"
 import "errors"
 import "strings"
+import "unicode"
 import "github.com/nlopes/slack"
 import "github.com/tadgh/go-toggl"
 import "encoding/gob"
@@ -25,7 +26,7 @@ func pingTogglApi(apiKey string) error {
 	ts := toggl.OpenSession(apiKey)
 	_, err := ts.GetAccount()
 	if err != nil {
-		fmt.Println(os.Stderr, "Error: %s\n", err)
+		fmt.Println(os.Stderr, "Error: %s\n", err)	
 		return err
 	}
 	return nil
@@ -220,12 +221,15 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			projectName := commandArray[1]
 			pid := getProjectWithName(togglApiKey, projectName)
 			timeRange := commandArray[2]
+
+			parsedDate := parseDate(commandArray[3])
+
 			description := "no description provided"
-			if len(commandArray) > 3 {
-				description = strings.Join(commandArray[3:], " ")
+			if len(commandArray) > 4 {
+				description = strings.Join(commandArray[4:], " ")
 			}
 
-			startTime, duration, err := parseTimeRange(timeRange)
+			startTime, duration, err := parseTimeRange(timeRange, parsedDate)
 			if err != nil {
 				reply.DisplayTitle = err.Error()
 				replyChannel <- reply
@@ -241,7 +245,16 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 	}
 }
 
-func parseTimeRange(timeRange string) (*time.Time, *time.Duration, error) {
+func parseDate(readingDate string) (*time.Date, error) {
+	parsedDate, err := time.Parse("2006/01/02", readingDate)
+	if err != nil {
+		return nil, errors.New("Your date is incorrectly formatted! Try something like: 2017/08/11. The ISO 8601 Standard 😉")
+	}
+
+	return parsedDate
+}
+
+func parseTimeRange(timeRange string, parsedDate time.Date) (*time.Time, *time.Duration, error) {
 	timeRange = strings.ToUpper(timeRange)
 	fields := strings.Split(timeRange, "-")
 	if len(fields) != 2 {
@@ -260,10 +273,15 @@ func parseTimeRange(timeRange string) (*time.Time, *time.Duration, error) {
 
 	duration := endTime.Sub(startTime)
 
+	if parsedDate == nil {
+		dateToInput := time.Now()
+	} else {
+		dateToInput := parsedDate
+	}
+
 	// Kitchen time has only hours and PM/AM. Drop in today's date.
-	now := time.Now()
-	fmt.Println("NOW:\t", now)
-	startTime = time.Date(now.Year(), now.Month(), now.Day(), startTime.Hour(), startTime.Minute(), startTime.Second(), startTime.Nanosecond(), now.Location())
+	fmt.Println("DATE:\t", dateToInput)
+	startTime = time.Date(dateToInput.Year(), dateToInput.Month(), dateToInput.Day(), startTime.Hour(), startTime.Minute(), startTime.Second(), startTime.Nanosecond(), now.Location())
 	fmt.Println("START TIME:\t", startTime)
 	return &startTime, &duration, nil
 }
