@@ -214,7 +214,7 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			replyChannel <- reply
 		case "track":
 			if len(commandArray) < 3 {
-				reply.DisplayTitle = "Sorry, I don't have enough information to make an event for you. try `@togglbot track PROJECT_NAME 9:00AM-5:00PM TASK_DESCRIPTION`"
+				reply.DisplayTitle = "Sorry, I don't have enough information to make an event for you. try `@togglbot track PROJECT_NAME 9:00AM-5:00PM YYYY/MM/DD (or 'today') TASK_DESCRIPTION`"
 				replyChannel <- reply
 				break
 			}
@@ -222,7 +222,7 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			pid := getProjectWithName(togglApiKey, projectName)
 			timeRange := commandArray[2]
 
-			parsedDate := parseDate(commandArray[3])
+			parsedDate, err := parseDate(commandArray[3])
 
 			description := "no description provided"
 			if len(commandArray) > 4 {
@@ -246,7 +246,10 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 }
 
 func parseDate(readingDate string) (*time.Date, error) {
-	parsedDate, err := time.Parse("2006/01/02", readingDate)
+	if strings.ToLower(readingDate) == "today" {
+		return nil, nil
+	}
+	parsedDate, err := time.Parse("2006/1/2", readingDate)
 	if err != nil {
 		return nil, errors.New("Your date is incorrectly formatted! Try something like: 2017/08/11. The ISO 8601 Standard 😉")
 	}
