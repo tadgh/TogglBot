@@ -129,7 +129,7 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 		"register": "Register yourself with togglbot. `@togglbot register MY_TOGGL_API_KEY`",
 		"start":    "Start a timer for a given project and description. `@togglbot start <PROJECT_NAME> <EVERYTHING_ELSE_IS_DESCRIPTION>`",
 		"stop":     "Stops any current timer session. `@togglbot stop`",
-		"track":    "adds a toggl entry with an optional description to a project for a given time range and date (optional). `@togglbot track icancope 9am-5pm` OR `@togglbot track icancope 9am-5pm 2017/08/11 description",
+		"track":    "adds a toggl entry with an optional description to a project for a given time range and date (optional). `@togglbot track icancope 9am-5pm` OR `@togglbot track icancope 9am-5pm 2017/08/11 description`",
 	}
 
 	for {
