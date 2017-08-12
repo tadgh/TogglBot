@@ -5,7 +5,6 @@ import "log"
 import "os"
 import "errors"
 import "strings"
-import "unicode"
 import "github.com/nlopes/slack"
 import "github.com/tadgh/go-toggl"
 import "encoding/gob"
@@ -130,8 +129,7 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 		"register": "Register yourself with togglbot. `@togglbot register MY_TOGGL_API_KEY`",
 		"start":    "Start a timer for a given project and description. `@togglbot start <PROJECT_NAME> <EVERYTHING_ELSE_IS_DESCRIPTION>`",
 		"stop":     "Stops any current timer session. `@togglbot stop`",
-		"track":    "adds a toggl entry with an optional description to a project for a given time range and date (optional)." 
-			+ "`@togglbot track icancope 9am-5pm` OR `@togglbot track icancope 9am-5pm 2017/08/11 description",
+		"track":    "adds a toggl entry with an optional description to a project for a given time range and date (optional). `@togglbot track icancope 9am-5pm` OR `@togglbot track icancope 9am-5pm 2017/08/11 description",
 	}
 
 	for {
@@ -224,12 +222,13 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			timeRange := commandArray[2]
 
 			description := "no description provided"
-			entryDate := time.Now() // Defauly day is today
+			var entryDate time.Time;
+			var dateError error;
 
 			if len(commandArray) > 3 {
-				entryDate = parseDate(commandArray[3])
+				entryDate, dateError = parseDate(commandArray[3])
 
-				if entryDate == nil {
+				if dateError != nil {
 					description = strings.Join(commandArray[3:], " ")
 				} else {
 					if len(commandArray) > 4 {
@@ -254,19 +253,19 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 	}
 }
 
-func parseDate(readingDate string) (*time.Date) {
+func parseDate(readingDate string) (time.Time, error) {
 	parsedDate, err := time.Parse("2006/1/2", readingDate)
 	if err != nil {
-		return nil
+		return time.Now(), err
 	}
 
 	/* No error is returned if malformed date because if parsedDate == nil it will 
 	be assumed to be a description thus error will never be shown */
 
-	return parsedDate
+	return parsedDate, nil
 }
 
-func parseTimeRange(timeRange string, parsedDate time.Date) (*time.Time, *time.Duration, error) {
+func parseTimeRange(timeRange string, parsedDate time.Time) (*time.Time, *time.Duration, error) {
 	timeRange = strings.ToUpper(timeRange)
 	fields := strings.Split(timeRange, "-")
 	if len(fields) != 2 {
@@ -285,15 +284,9 @@ func parseTimeRange(timeRange string, parsedDate time.Date) (*time.Time, *time.D
 
 	duration := endTime.Sub(startTime)
 
-	if parsedDate == nil {
-		dateToInput := time.Now()
-	} else {
-		dateToInput := parsedDate
-	}
-
 	// Kitchen time has only hours and PM/AM. Drop in today's date.
-	fmt.Println("DATE:\t", dateToInput)
-	startTime = time.Date(dateToInput.Year(), dateToInput.Month(), dateToInput.Day(), startTime.Hour(), startTime.Minute(), startTime.Second(), startTime.Nanosecond(), now.Location())
+	fmt.Println("DATE:\t", parsedDate)
+	startTime = time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), startTime.Hour(), startTime.Minute(), startTime.Second(), startTime.Nanosecond(), parsedDate.Location())
 	fmt.Println("START TIME:\t", startTime)
 	return &startTime, &duration, nil
 }
