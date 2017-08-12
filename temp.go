@@ -130,7 +130,8 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 		"register": "Register yourself with togglbot. `@togglbot register MY_TOGGL_API_KEY`",
 		"start":    "Start a timer for a given project and description. `@togglbot start <PROJECT_NAME> <EVERYTHING_ELSE_IS_DESCRIPTION>`",
 		"stop":     "Stops any current timer session. `@togglbot stop`",
-		"track":    "adds a toggl entry to a project for a given time range. `@togglbot track icancope 9am-5pm`",
+		"track":    "adds a toggl entry with an optional description to a project for a given time range and date (optional)." 
+			+ "`@togglbot track icancope 9am-5pm` OR `@togglbot track icancope 9am-5pm 2017/08/11 description",
 	}
 
 	for {
@@ -214,7 +215,7 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			replyChannel <- reply
 		case "track":
 			if len(commandArray) < 3 {
-				reply.DisplayTitle = "Sorry, I don't have enough information to make an event for you. try `@togglbot track PROJECT_NAME 9:00AM-5:00PM YYYY/MM/DD (or 'today') TASK_DESCRIPTION`"
+				reply.DisplayTitle = "Sorry, I don't have enough information to make an event for you. try `@togglbot track PROJECT_NAME 9:00AM-5:00PM YYYY/MM/DD TASK_DESCRIPTION`"
 				replyChannel <- reply
 				break
 			}
@@ -222,14 +223,22 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			pid := getProjectWithName(togglApiKey, projectName)
 			timeRange := commandArray[2]
 
-			parsedDate, err := parseDate(commandArray[3])
-
 			description := "no description provided"
-			if len(commandArray) > 4 {
-				description = strings.Join(commandArray[4:], " ")
-			}
+			entryDate := time.Now() // Defauly day is today
 
-			startTime, duration, err := parseTimeRange(timeRange, parsedDate)
+			if len(commandArray) > 3 {
+				entryDate = parseDate(commandArray[3])
+
+				if entryDate == nil {
+					description = strings.Join(commandArray[3:], " ")
+				} else {
+					if len(commandArray) > 4 {
+						description = strings.Join(commandArray[4:], " ")
+					}
+				}
+			}
+			
+			startTime, duration, err := parseTimeRange(timeRange, entryDate)
 			if err != nil {
 				reply.DisplayTitle = err.Error()
 				replyChannel <- reply
@@ -239,22 +248,22 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			reply.DisplayTitle = "Time entry created!"
 			replyChannel <- reply
 		default:
-			reply.DisplayTitle = "Sorry, i don't understand that command. Try `@Togglbot help`"
+			reply.DisplayTitle = "Sorry, I don't understand that command. Try `@Togglbot help`"
 			replyChannel <- reply
 		}
 	}
 }
 
-func parseDate(readingDate string) (*time.Date, error) {
-	if strings.ToLower(readingDate) == "today" {
-		return time.Now(), nil
-	}
+func parseDate(readingDate string) (*time.Date) {
 	parsedDate, err := time.Parse("2006/1/2", readingDate)
 	if err != nil {
-		return nil, errors.New("Your date is incorrectly formatted! Try something like: 2017/08/11. The ISO 8601 Standard 😉")
+		return nil
 	}
 
-	return parsedDate, nil
+	/* No error is returned if malformed date because if parsedDate == nil it will 
+	be assumed to be a description thus error will never be shown */
+
+	return parsedDate
 }
 
 func parseTimeRange(timeRange string, parsedDate time.Date) (*time.Time, *time.Duration, error) {
