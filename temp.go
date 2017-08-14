@@ -222,7 +222,7 @@ func handleBotCommands(replyChannel chan ReplyChannel) {
 			timeRange := commandArray[2]
 
 			description := "no description provided"
-			var entryDate time.Time;
+			entryDate := time.Now()
 			var dateError error;
 
 			if len(commandArray) > 3 {
