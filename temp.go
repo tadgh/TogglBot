@@ -318,8 +318,6 @@ func main() {
 	//create new
 	err := Load(file, &userMap)
 	if err != nil {
-		fmt.Println("ERROR WAS DETECTED")
-		log.Fatal(err)
 		userMap = make(map[string]string)
 	}
 
